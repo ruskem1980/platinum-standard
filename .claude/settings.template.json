@@ -1,0 +1,157 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Task$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$TOOL_INPUT_prompt\" ] && bash .claude/helpers/cf-hook.sh hooks pre-task --task-id \"task-$(date +%s)\" --description \"$TOOL_INPUT_prompt\" 2>>/tmp/claude-flow-hooks.log || true",
+            "timeout": 5000,
+            "continueOnError": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(Write|Edit|MultiEdit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$TOOL_INPUT_file_path\" ] && bash .claude/helpers/cf-hook.sh hooks post-edit --file \"$TOOL_INPUT_file_path\" --success \"${TOOL_SUCCESS:-true}\" 2>>/tmp/claude-flow-hooks.log || true",
+            "timeout": 5000,
+            "continueOnError": true
+          }
+        ]
+      },
+      {
+        "matcher": "^Task$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$TOOL_RESULT_agent_id\" ] && bash .claude/helpers/cf-hook.sh hooks post-task --task-id \"$TOOL_RESULT_agent_id\" --success \"${TOOL_SUCCESS:-true}\" 2>>/tmp/claude-flow-hooks.log || true",
+            "timeout": 15000,
+            "continueOnError": true
+          },
+          {
+            "type": "command",
+            "command": "[ \"${TOOL_SUCCESS:-true}\" = \"true\" ] && [ -n \"$TOOL_INPUT_subagent_type\" ] && bash .claude/helpers/cf-hook.sh memory store --namespace patterns --key \"task-${TOOL_INPUT_subagent_type}-$(date +%s)\" --value \"{\\\"agent\\\":\\\"$TOOL_INPUT_subagent_type\\\",\\\"success\\\":true,\\\"ts\\\":$(date +%s)}\" 2>>/tmp/claude-flow-hooks.log || true",
+            "timeout": 5000,
+            "continueOnError": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/helpers/daemon-watchdog.sh start 2>>/tmp/claude-flow-hooks.log || true",
+            "timeout": 10000,
+            "continueOnError": true
+          },
+          {
+            "type": "command",
+            "command": "[ -n \"$SESSION_ID\" ] && bash .claude/helpers/cf-hook.sh hooks session-restore --session-id \"$SESSION_ID\" 2>>/tmp/claude-flow-hooks.log || true",
+            "timeout": 10000,
+            "continueOnError": true
+          },
+          {
+            "type": "command",
+            "command": "echo \"\\n Model Routing:\\n  haiku   -> search, docs, tests, simple tasks (Claude Task)\\n  flash   -> analyze, audit, review, docs (Gemini CLI FREE)\\n  sonnet  -> coding, review, refactoring (Claude Task)\\n  pro     -> architecture, deep analysis (Gemini CLI FREE)\\n  opus    -> security, complex architecture (Claude Task)\\n\\n Agent Types:\\n  researcher(haiku) | coder(sonnet) | tester(haiku) | reviewer(sonnet)\\n  security-auditor(opus) | system-architect(sonnet) | Explore(haiku)\\n  Gemini Flash -> bash gemini-router.sh {analyze|review|audit|docs|bugs}\\n  Gemini Pro   -> bash gemini-router.sh architecture\\n\"",
+            "timeout": 2000,
+            "continueOnError": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/helpers/daemon-watchdog.sh stop 2>>/tmp/claude-flow-hooks.log || true",
+            "timeout": 3000,
+            "continueOnError": true
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$NOTIFICATION_MESSAGE\" ] && bash .claude/helpers/cf-hook.sh memory store --namespace notifications --key \"notify-$(date +%s)\" --value \"$NOTIFICATION_MESSAGE\" 2>>/tmp/claude-flow-hooks.log || true",
+            "timeout": 3000,
+            "continueOnError": true
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash .claude/helpers/cf-hook.sh hooks statusline 2>/dev/null || echo \"▊ Claude Flow V3\"",
+    "refreshMs": 5000,
+    "enabled": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npx claude-flow:*)",
+      "Bash(npx @claude-flow/cli:*)",
+      "Bash(bash .claude/helpers/*)",
+      "Bash(gemini --prompt:*)",
+      "Bash(gemini -p:*)",
+      "Bash(bash .claude/helpers/gemini-router.sh:*)",
+      "mcp__claude-flow__:*"
+    ],
+    "deny": []
+  },
+  "attribution": {
+    "commit": "Co-Authored-By: claude-flow <ruv@ruv.net>",
+    "pr": "Generated with [claude-flow](https://github.com/ruvnet/claude-flow)"
+  },
+  "claudeFlow": {
+    "version": "3.0.0",
+    "enabled": true,
+    "modelPreferences": {
+      "default": "claude-sonnet-4-5-20250929",
+      "routing": "claude-haiku-4-5-20251001",
+      "simple": "claude-haiku-4-5-20251001",
+      "complex": "claude-opus-4-6",
+      "geminiFlash": "gemini-3-flash-preview",
+      "geminiPro": "gemini-3-pro-preview"
+    },
+    "swarm": {
+      "topology": "hierarchical-mesh",
+      "maxAgents": 15
+    },
+    "memory": {
+      "backend": "hybrid",
+      "enableHNSW": true
+    },
+    "neural": {
+      "enabled": true
+    },
+    "daemon": {
+      "autoStart": true,
+      "hookRelay": true,
+      "workers": ["map", "audit", "optimize", "testgaps"]
+    },
+    "learning": {
+      "enabled": true,
+      "autoTrain": true,
+      "patterns": ["coordination", "optimization", "prediction"]
+    },
+    "security": {
+      "autoScan": true,
+      "scanOnEdit": true,
+      "cveCheck": true,
+      "threatModel": true
+    }
+  }
+}
