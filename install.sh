@@ -30,7 +30,7 @@ mkdir -p "$TARGET/.claude/helpers"
 
 # Копируем helpers
 echo "  [1/5] Копирую helpers..."
-for file in cf-hook.sh hook-relay.mjs daemon-watchdog.sh gemini-router.sh; do
+for file in cf-hook.sh hook-relay.mjs daemon-watchdog.sh gemini-router.sh model-fallback.sh; do
   cp "$SCRIPT_DIR/.claude/helpers/$file" "$TARGET/.claude/helpers/$file"
   echo "    ✓ $file"
 done

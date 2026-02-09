@@ -39,6 +39,12 @@
             "command": "[ \"${TOOL_SUCCESS:-true}\" = \"true\" ] && [ -n \"$TOOL_INPUT_subagent_type\" ] && bash .claude/helpers/cf-hook.sh memory store --namespace patterns --key \"task-${TOOL_INPUT_subagent_type}-$(date +%s)\" --value \"{\\\"agent\\\":\\\"$TOOL_INPUT_subagent_type\\\",\\\"success\\\":true,\\\"ts\\\":$(date +%s)}\" 2>>/tmp/claude-flow-hooks.log || true",
             "timeout": 5000,
             "continueOnError": true
+          },
+          {
+            "type": "command",
+            "command": "[ \"${TOOL_SUCCESS:-false}\" = \"false\" ] && [ -n \"$TOOL_INPUT_model\" ] && bash .claude/helpers/model-fallback.sh detect \"$TOOL_RESULT\" \"$TOOL_INPUT_model\" 2>>/tmp/claude-flow-hooks.log && echo \"\\n⚠ Rate limit обнаружен. Статус моделей: bash .claude/helpers/model-fallback.sh status\\n\" || true",
+            "timeout": 5000,
+            "continueOnError": true
           }
         ]
       }
@@ -61,7 +67,7 @@
           },
           {
             "type": "command",
-            "command": "echo \"\\n Model Routing:\\n  haiku   -> search, docs, tests, simple tasks (Claude Task)\\n  flash   -> analyze, audit, review, docs (Gemini CLI FREE)\\n  sonnet  -> coding, review, refactoring (Claude Task)\\n  pro     -> architecture, deep analysis (Gemini CLI FREE)\\n  opus    -> security, complex architecture (Claude Task)\\n\\n Agent Types:\\n  researcher(haiku) | coder(sonnet) | tester(haiku) | reviewer(sonnet)\\n  security-auditor(opus) | system-architect(sonnet) | Explore(haiku)\\n  Gemini Flash -> bash gemini-router.sh {analyze|review|audit|docs|bugs}\\n  Gemini Pro   -> bash gemini-router.sh architecture\\n\"",
+            "command": "echo \"\\n Model Routing + Fallback:\\n  haiku   -> search, docs, tests   [лимит → gemini-flash → opus]\\n  flash   -> analyze, audit, review [лимит → gemini-pro → opus]  FREE\\n  sonnet  -> coding, refactoring   [лимит → gemini-flash → opus]\\n  pro     -> architecture, analysis [лимит → opus]              FREE\\n  opus    -> security, complex arch [последний рубеж]\\n\\n  Статус моделей: bash .claude/helpers/model-fallback.sh status\\n\"",
             "timeout": 2000,
             "continueOnError": true
           }

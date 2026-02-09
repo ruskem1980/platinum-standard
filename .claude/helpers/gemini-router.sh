@@ -41,7 +41,10 @@ collect_files() {
   fi
 }
 
-# Вызов Gemini с промптом и файлами
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FALLBACK_SCRIPT="$SCRIPT_DIR/model-fallback.sh"
+
+# Вызов Gemini с промптом и файлами + автоматический fallback при лимите
 call_gemini() {
   local model="$1"
   local prompt="$2"
@@ -49,13 +52,75 @@ call_gemini() {
 
   log "CALL: model=$model target=$target prompt=${prompt:0:50}..."
 
+  local output
+  local exit_code
+
   if [ -n "$target" ]; then
-    collect_files "$target" | gemini -p "$prompt" --model "$model" -y 2>/dev/null
+    output=$(collect_files "$target" | gemini -p "$prompt" --model "$model" -y 2>&1)
+    exit_code=$?
   else
-    gemini -p "$prompt" --model "$model" -y 2>/dev/null
+    output=$(gemini -p "$prompt" --model "$model" -y 2>&1)
+    exit_code=$?
   fi
 
-  local exit_code=$?
+  # Проверяем на rate limit
+  if [ $exit_code -ne 0 ] || echo "$output" | grep -qiE "RESOURCE_EXHAUSTED|429|rate.?limit|quota|daily.?limit"; then
+    # Определяем имя модели для fallback
+    local fb_name="gemini-flash"
+    if echo "$model" | grep -qi "pro"; then
+      fb_name="gemini-pro"
+    fi
+
+    log "RATE LIMIT: model=$model exit=$exit_code — запускаю fallback"
+
+    # Блокируем модель
+    if [ -f "$FALLBACK_SCRIPT" ]; then
+      bash "$FALLBACK_SCRIPT" block "$fb_name" 15 >> "$LOG" 2>&1
+    fi
+
+    # Fallback: gemini-flash → gemini-pro → opus (через cf-hook.sh / npx)
+    if [ "$fb_name" = "gemini-flash" ]; then
+      log "FALLBACK: gemini-flash → gemini-pro"
+      echo "$output" | head -1
+      echo ""
+      echo "⚠ Gemini Flash лимит исчерпан. Переключаюсь на Gemini Pro..."
+      echo ""
+
+      if [ -n "$target" ]; then
+        output=$(collect_files "$target" | gemini -p "$prompt" --model "$PRO" -y 2>&1)
+        exit_code=$?
+      else
+        output=$(gemini -p "$prompt" --model "$PRO" -y 2>&1)
+        exit_code=$?
+      fi
+
+      # Если и Pro не работает — fallback на Opus через уведомление
+      if [ $exit_code -ne 0 ] || echo "$output" | grep -qiE "RESOURCE_EXHAUSTED|429|rate.?limit|quota"; then
+        log "FALLBACK: gemini-pro тоже заблокирован → opus (уведомление)"
+        if [ -f "$FALLBACK_SCRIPT" ]; then
+          bash "$FALLBACK_SCRIPT" block "gemini-pro" 15 >> "$LOG" 2>&1
+        fi
+        echo "⚠ Все Gemini модели недоступны. Используйте Claude Opus:"
+        echo "  → В Claude Code: Task с subagent_type и model='opus'"
+        echo "  → Или подождите 15 минут для сброса лимитов"
+        echo ""
+        echo "  Проверить статус: bash .claude/helpers/model-fallback.sh status"
+        return 1
+      fi
+    else
+      # gemini-pro заблокирован → уведомление об opus
+      log "FALLBACK: gemini-pro → opus (уведомление)"
+      if [ -f "$FALLBACK_SCRIPT" ]; then
+        bash "$FALLBACK_SCRIPT" block "gemini-pro" 15 >> "$LOG" 2>&1
+      fi
+      echo "⚠ Gemini Pro лимит исчерпан. Используйте Claude Opus:"
+      echo "  → В Claude Code: Task с subagent_type и model='opus'"
+      echo "  → Или подождите 15 минут для сброса лимитов"
+      return 1
+    fi
+  fi
+
+  echo "$output"
   log "DONE: model=$model exit=$exit_code"
   return $exit_code
 }

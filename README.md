@@ -1,6 +1,6 @@
 # Platinum Standard
 
-Портативная spawn-система для Claude Code — hook relay, watchdog, Gemini роутинг, авто-обучение, 41 тест без LLM.
+Портативная spawn-система для Claude Code — hook relay, watchdog, Gemini роутинг, автоматический fallback моделей, авто-обучение, 41 тест без LLM.
 
 ---
 
@@ -12,6 +12,7 @@
 - **Watchdog** — убивает zombie/orphan процессы, управляет жизненным циклом relay
 - **Gemini Router** — бесплатный анализ кода через Gemini CLI (1M токенов контекст, 1000 запросов/день)
 - **Auto-learning** — сохраняет паттерны успешных задач в memory для будущих сессий
+- **Model Fallback** — автоматическое переключение при лимитах: Claude → Gemini 3 → Opus
 - **41 тест** — проверка latency, throughput, zombie detection, efficiency score без LLM
 
 ---
@@ -35,6 +36,7 @@ curl -sL https://raw.githubusercontent.com/ruskem1980/platinum-standard/main/.cl
 curl -sL https://raw.githubusercontent.com/ruskem1980/platinum-standard/main/.claude/helpers/hook-relay.mjs -o .claude/helpers/hook-relay.mjs
 curl -sL https://raw.githubusercontent.com/ruskem1980/platinum-standard/main/.claude/helpers/daemon-watchdog.sh -o .claude/helpers/daemon-watchdog.sh
 curl -sL https://raw.githubusercontent.com/ruskem1980/platinum-standard/main/.claude/helpers/gemini-router.sh -o .claude/helpers/gemini-router.sh
+curl -sL https://raw.githubusercontent.com/ruskem1980/platinum-standard/main/.claude/helpers/model-fallback.sh -o .claude/helpers/model-fallback.sh
 chmod +x .claude/helpers/*.sh
 
 # 2. Скопировать настройки (если нет .claude/settings.json)
@@ -68,7 +70,8 @@ PROJECTS_DIR=/path/to/projects bash /tmp/platinum-standard/deploy.sh
 │   ├── cf-hook.sh           # Быстрый executor (socket ~5ms → npx ~2s)
 │   ├── hook-relay.mjs       # Unix socket сервер v2 (lock, metrics, health)
 │   ├── daemon-watchdog.sh   # Управление relay, очистка zombie
-│   └── gemini-router.sh     # Gemini CLI роутинг (бесплатно)
+│   ├── gemini-router.sh     # Gemini CLI роутинг (бесплатно) + fallback
+│   └── model-fallback.sh    # Автоматический fallback при лимитах
 ├── settings.json            # Hooks, permissions, model routing
 └── settings.template.json   # Шаблон (для справки)
 
@@ -164,6 +167,61 @@ bash .claude/helpers/gemini-router.sh custom "найди утечки памят
 | gemini-2.5-pro | Бесплатно | Архитектура, глубокий анализ |
 
 **Требование:** Установленный Gemini CLI (`npm install -g @anthropic-ai/gemini-cli`).
+
+### Model Fallback (`model-fallback.sh`)
+
+Автоматическое переключение моделей при исчерпании лимитов.
+
+**Цепочка fallback:**
+```
+haiku  ──лимит──→ gemini-flash ──лимит──→ gemini-pro ──лимит──→ opus
+sonnet ──лимит──→ gemini-flash ──лимит──→ gemini-pro ──лимит──→ opus
+gemini-flash ──лимит──→ gemini-pro ──лимит──→ opus
+gemini-pro ──лимит──→ opus
+opus ──лимит──→ ожидание (уведомление)
+```
+
+**Как работает:**
+1. При ошибке rate limit (429, quota exceeded) модель блокируется на 15 минут
+2. Следующий вызов автоматически идёт через fallback модель
+3. Gemini router при лимите переключается на следующую Gemini модель, затем уведомляет об Opus
+4. Истёкшие блокировки автоматически снимаются
+
+**Команды:**
+```bash
+# Посмотреть статус всех моделей
+bash .claude/helpers/model-fallback.sh status
+
+# Получить лучшую модель для задачи
+bash .claude/helpers/model-fallback.sh get coding       # → sonnet (или fallback)
+bash .claude/helpers/model-fallback.sh get analyze      # → gemini-flash (или fallback)
+bash .claude/helpers/model-fallback.sh get architecture # → gemini-pro (или fallback)
+bash .claude/helpers/model-fallback.sh get security     # → opus (или fallback)
+
+# Вручную заблокировать/разблокировать
+bash .claude/helpers/model-fallback.sh block sonnet 30    # блок на 30 мин
+bash .claude/helpers/model-fallback.sh unblock sonnet
+bash .claude/helpers/model-fallback.sh reset              # сбросить все блокировки
+
+# Показать цепочку для задачи
+bash .claude/helpers/model-fallback.sh chain coding
+
+# Проверить вывод на rate limit
+bash .claude/helpers/model-fallback.sh detect "429 Too Many Requests" sonnet
+```
+
+**Задачи и их цепочки:**
+| Задача | Цепочка fallback |
+|--------|-----------------|
+| search, docs, tests | haiku → gemini-flash → sonnet → opus |
+| analyze, review, audit | gemini-flash → sonnet → gemini-pro → opus |
+| coding, refactoring | sonnet → gemini-flash → gemini-pro → opus |
+| architecture | gemini-pro → sonnet → opus |
+| security | opus → gemini-pro → sonnet |
+
+**Состояние хранится в:** `/tmp/platinum-model-state.json`
+
+**ENV:** `BLOCK_MINUTES=15` — длительность блокировки (по умолчанию 15 минут).
 
 ### cf-hook.sh
 
@@ -392,6 +450,9 @@ gemini  # первый запуск — OAuth авторизация
 ## Диагностика
 
 ```bash
+# Статус моделей (fallback)
+bash .claude/helpers/model-fallback.sh status
+
 # Статус relay и daemon
 bash .claude/helpers/daemon-watchdog.sh status
 
@@ -435,8 +496,15 @@ Claude Code
     ├── Stop hook
     │   └── daemon-watchdog.sh stop
     │
-    └── Gemini Router (ручной вызов)
-        └── gemini-router.sh → Gemini CLI → анализ
+    ├── Gemini Router (ручной вызов)
+    │   └── gemini-router.sh → Gemini CLI → анализ
+    │       └── rate limit? → fallback → следующая модель
+    │
+    └── Model Fallback (автоматический)
+        └── model-fallback.sh → /tmp/platinum-model-state.json
+            ├── block модель на 15 мин
+            ├── auto-unblock по таймеру
+            └── get → лучшая доступная модель
 ```
 
 **Потоки данных:**
@@ -446,4 +514,8 @@ cf-hook.sh ──socket──→ hook-relay.mjs ──spawn──→ claude-flow
    └─ npx fallback ←───── lock file (O_EXCL)
                             │
                        /metrics, /health
+
+gemini-router.sh ──→ gemini CLI ──429──→ model-fallback.sh block
+                                          │
+                                    gemini-pro fallback ──429──→ opus уведомление
 ```

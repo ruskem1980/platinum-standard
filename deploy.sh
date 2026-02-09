@@ -63,7 +63,7 @@ for project in "${PROJECTS[@]}"; do
   echo "  [1] Копирую helpers..."
   mkdir -p "$project/.claude/helpers"
 
-  for file in cf-hook.sh hook-relay.mjs daemon-watchdog.sh gemini-router.sh; do
+  for file in cf-hook.sh hook-relay.mjs daemon-watchdog.sh gemini-router.sh model-fallback.sh; do
     if [ -f "$SCRIPT_DIR/.claude/helpers/$file" ]; then
       cp "$SCRIPT_DIR/.claude/helpers/$file" "$project/.claude/helpers/$file"
     fi
